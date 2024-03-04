@@ -5,6 +5,7 @@
 #pragma once
 
 #include "coroutine.h"
+#include "coroutinefeatures.h"
 #include "concepts_p.h"
 
 #include <atomic>
@@ -19,8 +20,9 @@ template<typename T = void>
 class Task;
 
 /*! \cond internal */
-
 namespace detail {
+
+struct ThisCoroPromise;
 
 template<typename T>
 struct awaiter_type;
@@ -167,19 +169,21 @@ public:
      * as an Awaitable type.
      */
     template<typename T>
-    auto await_transform(QCoro::Task<T> &&task);
+    QCoro::Task<T> &&await_transform(QCoro::Task<T> &&task);
 
     //! \copydoc template<typename T> QCoro::TaskPromiseBase::await_transform(QCoro::Task<T> &&)
     template<typename T>
-    auto &await_transform(QCoro::Task<T> &task);
+    QCoro::Task<T> &await_transform(QCoro::Task<T> &task);
 
     //! If the type T is already an awaitable, then just forward it as it is.
     template<Awaitable T>
-    auto && await_transform(T &&awaitable);
+    T &&await_transform(T &&awaitable);
 
     //! \copydoc template<Awaitable T> QCoro::TaskPromiseBase::await_transform(T &&)
     template<Awaitable T>
-    auto &await_transform(T &awaitable);
+    T &await_transform(T &awaitable);
+
+    auto await_transform(detail::ThisCoroPromise &&);
 
     //! Called by \c TaskAwaiter when co_awaited.
     /*!
@@ -193,18 +197,32 @@ public:
      */
     void addAwaitingCoroutine(std::coroutine_handle<> awaitingCoroutine);
 
+    //! Whether there's another coroutine co_awaiting this coroutine
     bool hasAwaitingCoroutine() const;
 
-    bool setDestroyHandle() noexcept;
+    //! Decrease coroutine reference count.
+    /*!
+     * When the reference count drops to zero, destroyCoroutine() is called.
+     */
+    void derefCoroutine();
+    //! Increase coroutine reference count.
+    void refCoroutine();
+
+    //! Destroys the coroutine represented by this Task.
+    void destroyCoroutine();
+
+    std::shared_ptr<CoroutineFeatures> features() const;
+
+protected:
+    explicit TaskPromiseBase();
 
 private:
     friend class TaskFinalSuspend;
 
     //! Handle of the coroutine that is currently co_awaiting this Awaitable
     std::vector<std::coroutine_handle<>> mAwaitingCoroutines;
-
-    //! Indicates whether we can destroy the coroutine handle
-    std::atomic<bool> mDestroyHandle{false};
+    std::atomic<int> mRefCount{0};
+    std::shared_ptr<CoroutineFeatures> mFeatures;
 };
 
 //! The promise_type for Task<T>

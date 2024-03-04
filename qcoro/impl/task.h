@@ -16,7 +16,11 @@ namespace QCoro
 {
 
 template<typename T>
-inline Task<T>::Task(std::coroutine_handle<promise_type> coroutine) : mCoroutine(coroutine) {}
+inline Task<T>::Task(std::coroutine_handle<promise_type> coroutine)
+    : mCoroutine(coroutine)
+{
+    mCoroutine.promise().refCoroutine();
+}
 
 template<typename T>
 inline Task<T>::Task(Task &&other) noexcept : mCoroutine(other.mCoroutine) {
@@ -28,10 +32,7 @@ template<typename T>
 inline auto Task<T>::operator=(Task &&other) noexcept -> Task & {
     if (std::addressof(other) != this) {
         if (mCoroutine) {
-            // The coroutine handle will be destroyed only after TaskFinalSuspend
-            if (mCoroutine.promise().setDestroyHandle()) {
-                mCoroutine.destroy();
-            }
+            mCoroutine.promise().derefCoroutine();
         }
 
         mCoroutine = other.mCoroutine;
@@ -42,11 +43,8 @@ inline auto Task<T>::operator=(Task &&other) noexcept -> Task & {
 
 template<typename T>
 inline Task<T>::~Task() {
-    if (!mCoroutine) return;
-
-    // The coroutine handle will be destroyed only after TaskFinalSuspend
-    if (mCoroutine.promise().setDestroyHandle()) {
-        mCoroutine.destroy();
+    if (mCoroutine) {
+        mCoroutine.promise().derefCoroutine();
     }
 }
 
@@ -67,7 +65,7 @@ inline auto Task<T>::operator co_await() const noexcept {
         /*
             * \return the result from the coroutine's promise, factically the
             * value co_returned by the coroutine. */
-        auto await_resume() {
+        auto await_resume() -> T {
             Q_ASSERT(this->mAwaitedCoroutine != nullptr);
             if constexpr (!std::is_void_v<T>) {
                 return std::move(this->mAwaitedCoroutine.promise().result());
