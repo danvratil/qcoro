@@ -178,7 +178,7 @@ private:
                 co_yield i;
             }
         };
-    
+
         {
           QCoro::AsyncGenerator<int> originalGenerator = createGenerator();
           generator = std::move(originalGenerator);

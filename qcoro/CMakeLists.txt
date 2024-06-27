@@ -22,6 +22,7 @@ add_qcoro_library(
     HEADERS
         concepts_p.h
         coroutine.h
+        coroutinefeatures.h
         macros_p.h
         waitoperationbase_p.h
         impl/connect.h

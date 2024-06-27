@@ -462,6 +462,36 @@ private:
         co_await verifySignalEmitted(this, &QCoroTaskTest::callbackCalled);
     }
 
+    QCoro::Task<> testGuardedThisDestroyed_coro(QCoro::TestContext ctx) {
+        ctx.setShouldNotSuspend();
+
+        bool notCalled = true;
+        bool destroyed = false;
+
+        auto coro = [&notCalled, &destroyed]() -> QCoro::Task<> {
+            auto obj = new QObject();
+
+            auto &features = co_await QCoro::thisCoro();
+            features.guardThis(obj);
+
+            QTimer::singleShot(0, [obj, &destroyed]() {
+                delete obj;
+                destroyed = true;
+            });
+            co_await timer();
+
+            notCalled = false;
+        };
+
+        // Don't co_await - when the coroutine gets destroyed, it won't
+        // resume this coroutine. We just call it and wait with nested event loop.
+        coro();
+
+        QTest::qWait(100);
+
+        QCORO_VERIFY(notCalled);
+    }
+
 private Q_SLOTS:
     addTest(SimpleCoroutine)
     addTest(CoroutineValue)
@@ -486,6 +516,7 @@ private Q_SLOTS:
     addThenTest(ImplicitArgumentConversion)
     addTest(MultipleAwaiters)
     addTest(MultipleAwaitersSync)
+    addTest(GuardedThisDestroyed)
 
     // See https://github.com/danvratil/qcoro/issues/24
     void testEarlyReturn()
