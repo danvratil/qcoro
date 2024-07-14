@@ -171,6 +171,10 @@ public:
     QCoroSignal(T *obj, FuncPtr &&ptr, std::chrono::milliseconds timeout)
         : QCoroSignalBase<T, FuncPtr>(obj, std::forward<FuncPtr>(ptr), timeout)
         , mDummyReceiver(std::make_unique<QObject>()) {}
+    QCoroSignal(T *obj, FuncPtr &&ptr, QObject *context, std::chrono::milliseconds timeout)
+        : QCoroSignalBase<T, FuncPtr>(obj, std::forward<FuncPtr>(ptr), timeout),
+          mContextObj(context),
+          mDummyReceiver(std::make_unique<QObject>()) {}
     QCoroSignal(const QCoroSignal &) = delete;
     QCoroSignal(QCoroSignal &&other) noexcept
         : QCoroSignalBase<T, FuncPtr>(std::move(other))
@@ -231,9 +235,33 @@ private:
                 }
             },
             Qt::QueuedConnection);
+
+        if (this->mContextObj) {
+            // Ensure that we don't leave the caller stuck in limbo if the sender gets deleted
+            this->mContextConn = QObject::connect(this->mContextObj, &QObject::destroyed,
+                                                  this->mDummyReceiver.get(), [this] {
+                                                      if (this->mTimeoutTimer) {
+                                                          this->mTimeoutTimer->stop();
+                                                      }
+                                                      QObject::disconnect(this->mConn);
+                                                      QObject::disconnect(this->mContextConn);
+
+                                                      if (mAwaitingCoroutine) {
+                                                          mAwaitingCoroutine.resume();
+                                                      }
+                                                  });
+            // Ensure that we don't follow the context after a timeout has occurred
+            if (this->mTimeoutTimer) {
+                QObject::connect(this->mTimeoutTimer.get(), &QTimer::timeout, this->mObj,
+                                 [this]() { QObject::disconnect(this->mContextConn); });
+            }
+        }
     }
 
     result_type mResult;
+
+    QPointer<QObject> mContextObj;
+    QMetaObject::Connection mContextConn;
     std::coroutine_handle<> mAwaitingCoroutine;
     std::unique_ptr<QObject> mDummyReceiver;
 };
@@ -353,6 +381,30 @@ template<QCoro::detail::concepts::QObject T, typename FuncPtr>
 inline auto qCoro(T *obj, FuncPtr &&ptr, std::chrono::milliseconds timeout)
     -> QCoro::Task<typename QCoro::detail::QCoroSignal<T, FuncPtr>::result_type> {
     auto result = co_await QCoro::detail::QCoroSignal(obj, std::forward<FuncPtr>(ptr), timeout);
+    co_return std::move(result);
+}
+
+//! Allows co_awaiting on signal emission with a context object and optionally a timeout.
+/*!
+ * Returns an Awaitable object that allows co_awaiting for a signal
+ * while ensuring that the coroutine will resume even if the sender object is
+ * deleted. If a timeout is specified, it will be respected as well.
+ *
+ * If the signal has exactly one argument, then the value of the argument is
+ * returned as a result of awaiting the coroutine. If the signal has two or
+ * more arguments, then the arguments are returned as a tuple. If the signal
+ * has no arguments, then the result of the coroutine is an empty tuple.
+ *
+ * If the sender is deleted or a timeout occurs before the signal is emitted,
+ * the result of the coroutine is an empty optional. If the \c timeout is -1
+ * the operation will never time out.
+ */
+template<QCoro::detail::concepts::QObject T, typename FuncPtr>
+inline auto qCoro(T *obj, FuncPtr &&ptr, QObject *context,
+                  std::chrono::milliseconds timeout = std::chrono::milliseconds(-1))
+    -> QCoro::Task<typename QCoro::detail::QCoroSignal<T, FuncPtr>::result_type> {
+    auto result =
+        co_await QCoro::detail::QCoroSignal(obj, std::forward<FuncPtr>(ptr), context, timeout);
     co_return std::move(result);
 }
 
